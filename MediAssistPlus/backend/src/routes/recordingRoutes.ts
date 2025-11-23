@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
-import { deleteRecording, generatePatientSummary, getRecordings, translateRecording, uploadRecording } from '../controllers/recordingController';
+import { deleteRecording, generatePatientSummary, getRecordings, translatePatientSummary, translateRecording, uploadRecording } from '../controllers/recordingController';
 import { authenticateDoctor } from '../middleware/authMiddleware';
 
 const router = express.Router();
@@ -25,6 +25,8 @@ router.post('/upload', upload.single('audio'), uploadRecording);
 router.get('/patient/:patientId', getRecordings);
 router.delete('/:id', deleteRecording);
 router.post('/patient/:patientId/summary', generatePatientSummary);
+router.post('/patient/:patientId/summary/translate', translatePatientSummary);
 router.post('/:id/translate', translateRecording);
+
 
 export default router; // Export the router

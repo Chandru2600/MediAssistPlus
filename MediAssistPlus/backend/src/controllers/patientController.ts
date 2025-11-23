@@ -9,6 +9,7 @@ interface AuthRequest extends Request {
 
 export const createPatient = async (req: AuthRequest, res: Response) => {
     try {
+        console.log('[createPatient] Request body:', req.body);
         const { name, age, gender, notes } = req.body;
         const doctorId = req.user.id;
 
@@ -23,9 +24,51 @@ export const createPatient = async (req: AuthRequest, res: Response) => {
         });
 
         res.status(201).json(patient);
-    } catch (error) {
+    } catch (error: any) {
         console.error('Full error details:', error);
-        res.status(500).json({ error: 'Error creating patient' });
+        const fs = require('fs');
+        const path = require('path');
+        const logPath = path.join(__dirname, '../../server_errors.log');
+        const logMessage = `[${new Date().toISOString()}] Error creating patient: ${error.message}\nStack: ${error.stack}\n\n`;
+        fs.appendFileSync(logPath, logMessage);
+
+        res.status(500).json({ error: 'Error creating patient', details: error.message });
+    }
+};
+
+export const updatePatient = async (req: AuthRequest, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { name, age, gender, notes } = req.body;
+        const doctorId = req.user.id;
+
+        // Verify patient belongs to doctor
+        const existingPatient = await prisma.patient.findUnique({
+            where: { id },
+        });
+
+        if (!existingPatient) {
+            return res.status(404).json({ error: 'Patient not found' });
+        }
+
+        if (existingPatient.doctorId !== doctorId) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const updatedPatient = await prisma.patient.update({
+            where: { id },
+            data: {
+                name,
+                age: age ? parseInt(age) : undefined,
+                gender,
+                notes,
+            },
+        });
+
+        res.json(updatedPatient);
+    } catch (error: any) {
+        console.error('Error updating patient:', error);
+        res.status(500).json({ error: 'Error updating patient', details: error.message });
     }
 };
 

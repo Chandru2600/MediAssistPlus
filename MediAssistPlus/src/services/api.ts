@@ -14,7 +14,7 @@ const api = axios.create({
         'Content-Type': 'application/json',
         'Bypass-Tunnel-Reminder': 'true',
     },
-    timeout: 60000, // 60 second timeout for translation
+    timeout: 120000, // 120 second timeout for translation/summarization
 });
 
 console.log('API configured with baseURL:', API_URL);

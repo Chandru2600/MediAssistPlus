@@ -11,7 +11,10 @@ interface AuthRequest extends Request {
 
 export const uploadRecording = async (req: AuthRequest, res: Response) => {
     try {
-        const { patientId } = req.body;
+        const { patientId, language } = req.body;
+        if (!req.user) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
         const doctorId = req.user.id;
         const file = req.file as any;
 
@@ -50,18 +53,25 @@ export const uploadRecording = async (req: AuthRequest, res: Response) => {
         });
 
         res.status(201).json(recording);
+
+        // Start processing in background
+        // Default to 'en-US' if no language provided
+        const languageCode = language || 'en-US';
+        processRecording(recording.id, file.path, languageCode).catch(err =>
+            console.error(`Background processing failed for ${recording.id}:`, err)
+        );
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error uploading recording' });
     }
 };
 
-const processRecording = async (recordingId: string, filePath: string) => {
+const processRecording = async (recordingId: string, filePath: string, languageCode: string = 'en-US') => {
     try {
-        console.log(`Starting processing for recording ${recordingId}`);
+        console.log(`Starting processing for recording ${recordingId} in language ${languageCode}`);
 
         // 1. Transcribe
-        const transcript = await transcribeAudio(filePath);
+        const transcript = await transcribeAudio(filePath, languageCode);
         await prisma.recording.update({
             where: { id: recordingId },
             data: { transcript },
@@ -104,6 +114,9 @@ export const getRecordings = async (req: AuthRequest, res: Response) => {
 export const deleteRecording = async (req: AuthRequest, res: Response) => {
     try {
         const { id } = req.params;
+        if (!req.user) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
         const doctorId = req.user.id;
 
         // Verify the recording belongs to this doctor
@@ -144,47 +157,99 @@ export const deleteRecording = async (req: AuthRequest, res: Response) => {
     }
 };
 
+const getPatientSummaryInternal = async (patientId: string) => {
+    // Fetch all recordings for the patient
+    const recordings = await prisma.recording.findMany({
+        where: { patientId },
+        orderBy: { createdAt: 'asc' }, // Order by date for timeline
+    });
+    console.log(`[getPatientSummary] Found ${recordings.length} recordings for patient ${patientId}`);
+
+    if (recordings.length === 0) {
+        throw new Error('No recordings found for this patient');
+    }
+
+    // Process any unprocessed recordings
+    console.log('[getPatientSummary] Checking for unprocessed recordings...');
+    for (const recording of recordings) {
+        if (!recording.transcript) {
+            console.log(`[getPatientSummary] Transcribing recording ${recording.id}...`);
+            try {
+                const transcript = await transcribeAudio(recording.audioUrl);
+                await prisma.recording.update({
+                    where: { id: recording.id },
+                    data: {
+                        transcript,
+                        status: 'COMPLETED' // Mark as completed once transcribed (for now)
+                    },
+                });
+                recording.transcript = transcript; // Update local object for summary
+            } catch (err) {
+                console.error(`[getPatientSummary] Failed to transcribe ${recording.id}`, err);
+            }
+        }
+    }
+
+    return await summarizePatientHistory(recordings);
+};
+
 export const generatePatientSummary = async (req: AuthRequest, res: Response) => {
     try {
         const { patientId } = req.params;
-
-        // Fetch all recordings for the patient
-        const recordings = await prisma.recording.findMany({
-            where: { patientId },
-            orderBy: { createdAt: 'asc' }, // Order by date for timeline
-        });
-        console.log(`[generatePatientSummary] Found ${recordings.length} recordings for patient ${patientId}`);
-
-        if (recordings.length === 0) {
-            return res.status(400).json({ error: 'No recordings found for this patient' });
-        }
-
-        // Process any unprocessed recordings
-        console.log('[generatePatientSummary] Checking for unprocessed recordings...');
-        for (const recording of recordings) {
-            if (!recording.transcript) {
-                console.log(`[generatePatientSummary] Transcribing recording ${recording.id}...`);
-                try {
-                    const transcript = await transcribeAudio(recording.audioUrl);
-                    await prisma.recording.update({
-                        where: { id: recording.id },
-                        data: {
-                            transcript,
-                            status: 'COMPLETED' // Mark as completed once transcribed (for now)
-                        },
-                    });
-                    recording.transcript = transcript; // Update local object for summary
-                } catch (err) {
-                    console.error(`[generatePatientSummary] Failed to transcribe ${recording.id}`, err);
-                }
-            }
-        }
-
-        const summary = await summarizePatientHistory(recordings);
+        const summary = await getPatientSummaryInternal(patientId);
         res.json(summary);
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error generating patient summary:', error);
-        res.status(500).json({ error: 'Error generating summary' });
+        res.status(500).json({ error: error.message || 'Error generating summary' });
+    }
+};
+
+export const translatePatientSummary = async (req: AuthRequest, res: Response) => {
+    console.log(`[Summary Translation] START request for patient ${req.params.patientId} to ${req.body.language}`);
+    try {
+        const { patientId } = req.params;
+        const { language } = req.body;
+
+        // 1. Get the English summary first
+        console.log(`[Summary Translation] Fetching English summary...`);
+        const summary = await getPatientSummaryInternal(patientId);
+        console.log(`[Summary Translation] English summary retrieved.`);
+
+        if (language === 'English') {
+            console.log(`[Summary Translation] Language is English, returning original.`);
+            return res.json(summary);
+        }
+
+        // 2. Translate fields
+        let translatedConcise = summary.concise;
+        let translatedDetailed = summary.detailed;
+
+        try {
+            console.log(`[Summary Translation] Translating concise section...`);
+            translatedConcise = await translateText(summary.concise, language);
+            console.log(`[Summary Translation] Concise translated.`);
+
+            console.log(`[Summary Translation] Translating detailed section...`);
+            translatedDetailed = await translateText(summary.detailed, language);
+            console.log(`[Summary Translation] Detailed translated.`);
+
+        } catch (error: any) {
+            console.error('[Summary Translation] Translation step failed:', error.message);
+            if (error.code === 'ECONNABORTED') {
+                console.error('[Summary Translation] Request timed out');
+            }
+            return res.status(500).json({ error: 'Translation failed' });
+        }
+
+        console.log(`[Summary Translation] sending response.`);
+        res.json({
+            concise: translatedConcise,
+            detailed: translatedDetailed
+        });
+
+    } catch (error: any) {
+        console.error('[Summary Translation] CRITICAL ERROR:', error);
+        res.status(500).json({ error: error.message || 'Error translating summary' });
     }
 };
 
@@ -193,15 +258,58 @@ export const translateRecording = async (req: AuthRequest, res: Response) => {
         const { id } = req.params;
         const { language } = req.body; // 'English', 'Kannada', 'Hindi'
 
+        console.log(`[Translation] Request for recording ${id} to ${language}`);
+
         const recording = await prisma.recording.findUnique({
             where: { id },
         });
 
-        if (!recording || !recording.transcript) {
-            return res.status(404).json({ error: 'Recording or transcript not found' });
-        }
+        // If transcript is missing OR (English and force=true), we need to transcribe
+        if (!recording.transcript || (language === 'English' && req.body.force)) {
+            console.log(`[Translation] Transcript missing or forced re-transcription for recording ${id}`);
+            try {
+                // Resolve file path
+                let filePath = recording.audioUrl;
+                if (!filePath.startsWith('http')) {
+                    const path = require('path');
+                    filePath = path.join(__dirname, '../../uploads', recording.audioUrl);
+                }
 
-        if (language === 'English') {
+                // Use the requested language for transcription if it's a new transcription
+                // If we are just re-transcribing, we might want to use the original language?
+                // But here we assume the user might be correcting the language.
+                // However, transcribeAudio takes 'languageCode'.
+                // If the user selected 'Kannada' for translation, they probably spoke Kannada?
+                // Or they spoke English and want Kannada translation?
+                // Usually 'translate' implies source is one thing, target is another.
+                // But if transcript is missing, we need to generate it first.
+                // Let's assume the recording language matches the target language if we are generating it now?
+                // No, that's risky. Let's default to 'en-US' for transcription unless we know otherwise.
+                // But wait, we don't store the recording language in DB yet (we just added it to upload).
+                // If we have it in DB (we don't), we'd use it.
+                // For now, let's use 'en-US' for transcription, then translate.
+
+                const newTranscript = await transcribeAudio(filePath, 'en-US');
+
+                // Update DB
+                await prisma.recording.update({
+                    where: { id },
+                    data: { transcript: newTranscript }
+                });
+
+                // If the target was English, return the new transcript
+                if (language === 'English') {
+                    return res.json({ translation: newTranscript });
+                }
+
+                // If target is not English, we continue to translation logic below
+                recording.transcript = newTranscript;
+
+            } catch (error) {
+                console.error('[Translation] Transcription failed:', error);
+                return res.status(500).json({ error: 'Failed to generate transcript' });
+            }
+        } else if (language === 'English' && !req.body.force) {
             return res.json({ translation: recording.transcript });
         }
 
@@ -214,19 +322,27 @@ export const translateRecording = async (req: AuthRequest, res: Response) => {
             if (isGoogleTranslateConfigured()) {
                 console.log(`[Translation] Using Google Cloud Translation for ${language}`);
                 translation = await translateWithGoogle(recording.transcript, language);
+                console.log(`[Translation] Google Translation successful`);
             } else {
                 console.log('[Translation] Google Cloud API key not configured, using Ollama');
                 translation = await translateText(recording.transcript, language);
             }
-        } catch (googleError) {
+        } catch (googleError: any) {
             // Fallback to Ollama if Google Translate fails
-            console.log(`[Translation] Google Translate failed, falling back to Ollama:`, googleError);
-            translation = await translateText(recording.transcript, language);
+            console.error(`[Translation] Google Translate failed:`, googleError.message || googleError);
+            console.log(`[Translation] Falling back to Ollama`);
+            try {
+                translation = await translateText(recording.transcript, language);
+                console.log(`[Translation] Ollama translation successful`);
+            } catch (ollamaError: any) {
+                console.error(`[Translation] Ollama also failed:`, ollamaError.message || ollamaError);
+                throw new Error(`Both Google and Ollama translation failed`);
+            }
         }
 
         res.json({ translation });
-    } catch (error) {
-        console.error('Error translating recording:', error);
-        res.status(500).json({ error: 'Error translating recording' });
+    } catch (error: any) {
+        console.error('[Translation] Final error:', error.message || error);
+        res.status(500).json({ error: 'Error translating recording', details: error.message });
     }
 };

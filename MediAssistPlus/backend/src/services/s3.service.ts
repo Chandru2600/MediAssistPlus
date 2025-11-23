@@ -4,10 +4,10 @@ import * as fs from 'fs';
 
 // Initialize S3 client
 const s3Client = new S3Client({
-    region: process.env.AWS_REGION || 'eu-north-1',
+    region: (process.env.AWS_REGION || 'eu-north-1').trim(),
     credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+        accessKeyId: (process.env.AWS_ACCESS_KEY_ID || '').trim(),
+        secretAccessKey: (process.env.AWS_SECRET_ACCESS_KEY || '').trim(),
     },
 });
 
@@ -34,7 +34,7 @@ export const uploadToS3 = async (filePath: string, key: string): Promise<string>
                 Key: key,
                 Body: fileContent,
                 ContentType: 'audio/m4a',
-                ACL: 'public-read', // Make file publicly accessible
+                // ACL: 'public-read', // Removed to avoid issues with Bucket Owner Enforced settings
             },
         });
 

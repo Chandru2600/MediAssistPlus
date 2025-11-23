@@ -39,6 +39,7 @@ model Recording {
   patientId  String
   audioUrl   String
   transcript String?
+
   summary    Json?
   status     String   @default("PENDING")
   createdAt  DateTime @default(now())

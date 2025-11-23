@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import * as Print from 'expo-print';
 import { useLocalSearchParams } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 import api from '../../../src/services/api';
 import { colors } from '../../../src/theme/colors';
@@ -15,6 +17,7 @@ export default function PatientDetailsScreen() {
     const [recordings, setRecordings] = useState([]);
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [isRecording, setIsRecording] = useState(false);
+    const [recordingLanguage, setRecordingLanguage] = useState('en-US'); // Default to English
     const [duration, setDuration] = useState(0);
     const [isUploading, setIsUploading] = useState(false);
     const timerRef = useRef<any>(null);
@@ -31,7 +34,22 @@ export default function PatientDetailsScreen() {
     const [selectedRecordingId, setSelectedRecordingId] = useState<string | null>(null);
     const [selectedLanguage, setSelectedLanguage] = useState('English');
     const [transcriptText, setTranscriptText] = useState('');
+
     const [isTranslating, setIsTranslating] = useState(false);
+
+    // Editable Notes State
+    const [isEditingNotes, setIsEditingNotes] = useState(false);
+    const [editedNotes, setEditedNotes] = useState('');
+
+    // Summary Translation State
+    const [summaryLanguage, setSummaryLanguage] = useState('English');
+    const [isTranslatingSummary, setIsTranslatingSummary] = useState(false);
+
+    useEffect(() => {
+        if (patient) {
+            setEditedNotes(patient.notes || '');
+        }
+    }, [patient]);
 
     useEffect(() => {
         fetchPatientDetails();
@@ -149,6 +167,7 @@ export default function PatientDetailsScreen() {
             console.log('Starting upload for URI:', uri);
             const formData = new FormData();
             formData.append('patientId', id as string);
+            formData.append('language', recordingLanguage);
             // @ts-ignore
             formData.append('audio', {
                 uri,
@@ -176,6 +195,21 @@ export default function PatientDetailsScreen() {
             Alert.alert('Error', `Failed to upload recording: ${error.message || 'Network error'}`);
         } finally {
             setIsUploading(false);
+        }
+    };
+
+    const saveNotes = async () => {
+        try {
+            await api.put(`/patients/${id}`, {
+                ...patient,
+                notes: editedNotes
+            });
+            setPatient({ ...patient, notes: editedNotes });
+            setIsEditingNotes(false);
+            Alert.alert('Success', 'Notes updated successfully');
+        } catch (error) {
+            console.error('Failed to update notes', error);
+            Alert.alert('Error', 'Failed to update notes');
         }
     };
 
@@ -310,15 +344,16 @@ export default function PatientDetailsScreen() {
         setShowTranscript(true);
     };
 
-    const handleLanguageChange = async (language: string) => {
-        if (language === selectedLanguage) return;
+    const handleLanguageChange = async (language: string, force = false) => {
+        if (language === selectedLanguage && !force) return;
 
         setSelectedLanguage(language);
         setIsTranslating(true);
 
         try {
             const response = await api.post(`/recordings/${selectedRecordingId}/translate`, {
-                language
+                language,
+                force
             });
             setTranscriptText(response.data.translation);
         } catch (error) {
@@ -326,6 +361,92 @@ export default function PatientDetailsScreen() {
             Alert.alert('Error', 'Failed to translate transcript');
         } finally {
             setIsTranslating(false);
+        }
+    };
+
+    const handleSummaryLanguageChange = async (language: string) => {
+        if (language === summaryLanguage) return;
+
+        setSummaryLanguage(language);
+        setIsTranslatingSummary(true);
+
+        try {
+            const response = await api.post(`/recordings/patient/${id}/summary/translate`, {
+                language
+            });
+            setSummary(response.data);
+        } catch (error) {
+            console.error('Summary translation failed', error);
+            Alert.alert('Error', 'Failed to translate summary');
+        } finally {
+            setIsTranslatingSummary(false);
+        }
+    };
+
+
+
+    const handlePrint = async () => {
+        if (!summary) return;
+
+        const html = `
+            <html>
+                <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+                    <style>
+                        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; }
+                        h1 { color: #005eb8; border-bottom: 2px solid #005eb8; padding-bottom: 10px; }
+                        h2 { color: #005eb8; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+                        .header { margin-bottom: 40px; }
+                        .patient-info { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+                        .info-row { display: flex; justify-content: space-between; margin-bottom: 10px; }
+                        .label { font-weight: bold; color: #666; }
+                        .content { line-height: 1.6; }
+                        .footer { margin-top: 50px; font-size: 12px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>MediAssist+ Patient Report</h1>
+                        <p>Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
+                    </div>
+
+                    <div class="patient-info">
+                        <div class="info-row">
+                            <span class="label">Patient Name:</span>
+                            <span>${patient.name}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">Age/Gender:</span>
+                            <span>${patient.age} / ${patient.gender}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">Patient ID:</span>
+                            <span>${patient.id}</span>
+                        </div>
+                    </div>
+
+                    <div class="content">
+                        <h2>Concise Overview</h2>
+                        <p>${summary.concise}</p>
+
+                        <h2>Detailed History</h2>
+                        <div style="white-space: pre-wrap;">${summary.detailed}</div>
+                    </div>
+
+                    <div class="footer">
+                        <p>Confidential Medical Record - For Professional Use Only</p>
+                        <p>MediAssist+ &bull; AI-Powered Medical Assistant</p>
+                    </div>
+                </body>
+            </html>
+        `;
+
+        try {
+            const { uri } = await Print.printToFileAsync({ html });
+            await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+        } catch (error) {
+            console.error('Print failed', error);
+            Alert.alert('Error', 'Failed to generate or share PDF report');
         }
     };
 
@@ -344,7 +465,29 @@ export default function PatientDetailsScreen() {
                             </Animated.View>
                         </View>
                     ) : (
-                        <Text style={styles.hintText}>Hold mic to record new consultation</Text>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.hintText}>Hold mic to record new consultation</Text>
+                            <View style={styles.languageSelector}>
+                                <TouchableOpacity
+                                    style={[styles.langChip, recordingLanguage === 'en-US' && styles.activeLangChip]}
+                                    onPress={() => setRecordingLanguage('en-US')}
+                                >
+                                    <Text style={[styles.langText, recordingLanguage === 'en-US' && styles.activeLangText]}>English</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.langChip, recordingLanguage === 'kn-IN' && styles.activeLangChip]}
+                                    onPress={() => setRecordingLanguage('kn-IN')}
+                                >
+                                    <Text style={[styles.langText, recordingLanguage === 'kn-IN' && styles.activeLangText]}>Kannada</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.langChip, recordingLanguage === 'hi-IN' && styles.activeLangChip]}
+                                    onPress={() => setRecordingLanguage('hi-IN')}
+                                >
+                                    <Text style={[styles.langText, recordingLanguage === 'hi-IN' && styles.activeLangText]}>Hindi</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
                     )}
 
                     <View style={styles.recordingButtons}>
@@ -385,8 +528,29 @@ export default function PatientDetailsScreen() {
                                 <Text style={styles.patientDetails}>{patient.age} yrs • {patient.gender}</Text>
                             </View>
                         </View>
-                        <Text style={styles.notesLabel}>Notes:</Text>
-                        <Text style={styles.notes}>{patient.notes || 'No notes available.'}</Text>
+                        <View style={styles.notesHeader}>
+                            <Text style={styles.notesLabel}>Notes:</Text>
+                            <TouchableOpacity onPress={() => {
+                                if (isEditingNotes) {
+                                    saveNotes();
+                                } else {
+                                    setIsEditingNotes(true);
+                                }
+                            }}>
+                                <Text style={styles.editBtn}>{isEditingNotes ? 'Save' : 'Edit'}</Text>
+                            </TouchableOpacity>
+                        </View>
+                        {isEditingNotes ? (
+                            <TextInput
+                                style={styles.notesInput}
+                                value={editedNotes}
+                                onChangeText={setEditedNotes}
+                                multiline
+                                placeholder="Add notes..."
+                            />
+                        ) : (
+                            <Text style={styles.notes}>{patient.notes || 'No notes available.'}</Text>
+                        )}
                         <View style={styles.statsRow}>
                             <Text style={styles.stat}>Total Recordings: {recordings.length}</Text>
                             <Text style={styles.stat}>Last: {new Date(patient.createdAt).toLocaleDateString()}</Text>
@@ -396,12 +560,13 @@ export default function PatientDetailsScreen() {
                     {/* Actions */}
                     <View style={styles.actionRow}>
                         <Text style={styles.sectionTitle}>Consultation History</Text>
-                        <Text
-                            style={styles.summarizeBtn}
-                            onPress={generateSummary}
-                        >
-                            {isGeneratingSummary ? 'Generating...' : 'Summarize All'}
-                        </Text>
+                        <TouchableOpacity onPress={generateSummary} disabled={isGeneratingSummary}>
+                            {isGeneratingSummary ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                                <Text style={styles.summarizeBtn}>Summarize All</Text>
+                            )}
+                        </TouchableOpacity>
                     </View>
 
                     {/* Recordings List */}
@@ -417,6 +582,9 @@ export default function PatientDetailsScreen() {
                                 <View style={styles.recordingActions}>
                                     <TouchableOpacity onPress={() => openTranscript(rec.id, rec.transcript)} style={styles.actionButton}>
                                         <Ionicons name="document-text-outline" size={28} color={colors.primary} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={() => openTranscript(rec.id, rec.transcript)} style={styles.actionButton}>
+                                        <Ionicons name="language" size={28} color={colors.secondary} />
                                     </TouchableOpacity>
                                     <TouchableOpacity onPress={() => playRecording(rec.audioUrl, rec.id)} style={styles.actionButton}>
                                         <Ionicons
@@ -456,15 +624,43 @@ export default function PatientDetailsScreen() {
                 {showSummary && summary && (
                     <View style={styles.modalOverlay}>
                         <View style={styles.modalContent}>
-                            <Text style={styles.modalTitle}>Patient Summary</Text>
-                            <ScrollView style={styles.modalScroll}>
-                                <Text style={styles.modalSectionTitle}>Concise Overview</Text>
-                                <Text style={styles.modalText}>{summary.concise}</Text>
+                            <View style={styles.modalHeader}>
+                                <Text style={styles.modalTitle}>Patient Summary</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+                                    <TouchableOpacity onPress={handlePrint}>
+                                        <Ionicons name="print-outline" size={24} color={colors.primary} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={() => setShowSummary(false)}>
+                                        <Ionicons name="close" size={24} color={colors.text} />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
 
-                                <Text style={styles.modalSectionTitle}>Detailed History</Text>
-                                <Text style={styles.modalText}>{summary.detailed}</Text>
-                            </ScrollView>
-                            <Text style={styles.closeBtn} onPress={() => setShowSummary(false)}>Close</Text>
+                            <View style={styles.languageTabs}>
+                                {['English', 'Kannada', 'Hindi'].map((lang) => (
+                                    <TouchableOpacity
+                                        key={lang}
+                                        style={[styles.tab, summaryLanguage === lang && styles.activeTab]}
+                                        onPress={() => handleSummaryLanguageChange(lang)}
+                                    >
+                                        <Text style={[styles.tabText, summaryLanguage === lang && styles.activeTabText]}>
+                                            {lang}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            {isTranslatingSummary ? (
+                                <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
+                            ) : (
+                                <ScrollView style={styles.modalScroll}>
+                                    <Text style={styles.modalSectionTitle}>Concise Overview</Text>
+                                    <Text style={styles.modalText}>{summary.concise}</Text>
+
+                                    <Text style={styles.modalSectionTitle}>Detailed History</Text>
+                                    <Text style={styles.modalText}>{summary.detailed}</Text>
+                                </ScrollView>
+                            )}
                         </View>
                     </View>
                 )}
@@ -475,9 +671,14 @@ export default function PatientDetailsScreen() {
                         <View style={styles.modalContent}>
                             <View style={styles.modalHeader}>
                                 <Text style={styles.modalTitle}>Transcript</Text>
-                                <TouchableOpacity onPress={() => setShowTranscript(false)}>
-                                    <Ionicons name="close" size={24} color={colors.text} />
-                                </TouchableOpacity>
+                                <View style={{ flexDirection: 'row', gap: 10 }}>
+                                    <TouchableOpacity onPress={() => handleLanguageChange(selectedLanguage, true)}>
+                                        <Ionicons name="refresh" size={24} color={colors.primary} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={() => setShowTranscript(false)}>
+                                        <Ionicons name="close" size={24} color={colors.text} />
+                                    </TouchableOpacity>
+                                </View>
                             </View>
 
                             <View style={styles.languageTabs}>
@@ -492,6 +693,7 @@ export default function PatientDetailsScreen() {
                                         </Text>
                                     </TouchableOpacity>
                                 ))}
+
                             </View>
 
                             <ScrollView style={styles.modalScroll}>
@@ -695,6 +897,31 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         fontSize: 14,
     },
+    languageSelector: {
+        flexDirection: 'row',
+        marginTop: 10,
+        gap: 8,
+    },
+    langChip: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 15,
+        backgroundColor: '#f0f0f0',
+        borderWidth: 1,
+        borderColor: '#ddd',
+    },
+    activeLangChip: {
+        backgroundColor: colors.primary,
+        borderColor: colors.primary,
+    },
+    langText: {
+        fontSize: 12,
+        color: '#666',
+    },
+    activeLangText: {
+        color: colors.white,
+        fontWeight: 'bold',
+    },
     modalOverlay: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: 'rgba(0,0,0,0.5)',
@@ -777,5 +1004,43 @@ const styles = StyleSheet.create({
     },
     activeTabText: {
         color: colors.primary,
+    },
+    notesHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginTop: 10,
+    },
+    editBtn: {
+        color: colors.primary,
+        fontWeight: 'bold',
+    },
+    notesInput: {
+        borderWidth: 1,
+        borderColor: '#ddd',
+        borderRadius: 8,
+        padding: 10,
+        marginTop: 5,
+        marginBottom: 15,
+        minHeight: 60,
+        textAlignVertical: 'top',
+    },
+    pdfBtn: {
+        backgroundColor: colors.primary,
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+    },
+    pdfBtnText: {
+        color: colors.white,
+        fontWeight: 'bold',
+        fontSize: 12,
+    },
+    reloadBtn: {
+        padding: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
 });

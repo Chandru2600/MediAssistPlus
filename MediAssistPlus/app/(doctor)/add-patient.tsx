@@ -29,8 +29,10 @@ export default function AddPatientScreen() {
             Alert.alert('Success', 'Patient added successfully', [
                 { text: 'OK', onPress: () => router.back() }
             ]);
-        } catch (error) {
-            Alert.alert('Error', 'Failed to add patient');
+        } catch (error: any) {
+            console.error('Add patient error:', error);
+            const errorMessage = error.response?.data?.error || error.message || 'Failed to add patient';
+            Alert.alert('Error', errorMessage);
         } finally {
             setIsLoading(false);
         }
