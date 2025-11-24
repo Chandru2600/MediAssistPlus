@@ -89,7 +89,7 @@ sequenceDiagram
     
     loop Background Processing
         Worker->>Worker: Pick Job
-        Worker->>AI: Send Audio for Transcription
+        Worker->>AI: Send Audio for Transcription 
         AI-->>Worker: Return Transcript
         Worker->>DB: Update Transcript
         
