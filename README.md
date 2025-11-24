@@ -35,23 +35,23 @@
 
 ```mermaid
 graph TD
-    subgraph Client
-        App[Mobile App (React Native)]
+    subgraph "Client"
+        App["Mobile App (React Native)"]
     end
 
-    subgraph Backend Server
-        API[Express API]
-        Auth[Auth Service]
-        Upload[Upload Service]
-        Queue[BullMQ Job Queue]
-        Worker[Background Worker]
+    subgraph "Backend Server"
+        API["Express API"]
+        Auth["Auth Service"]
+        Upload["Upload Service"]
+        Queue["BullMQ Job Queue"]
+        Worker["Background Worker"]
     end
 
-    subgraph Data & AI
-        DB[(PostgreSQL)]
-        Redis[(Redis)]
-        Ollama[Ollama AI Server]
-        Storage[File Storage]
+    subgraph "Data & AI"
+        DB["PostgreSQL"]
+        Redis["Redis"]
+        Ollama["Ollama AI Server"]
+        Storage["File Storage"]
     end
 
     App -->|HTTP Requests| API
